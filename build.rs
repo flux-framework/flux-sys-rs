@@ -23,10 +23,17 @@ fn main() {
         }
     }
 
+    let flux_path = match env::var("FLUX_PATH") {
+        Ok(p) => p,
+        Err(_) => "/usr/local/include".to_string()
+    };
+    let include_arg = "-I".to_string() + &flux_path + "/include";
+
     // The bindgen::Builder is the main entry point
     // to bindgen, and lets you build up options for
     // the resulting bindings.
     let bindings = bindgen::Builder::default()
+        .clang_arg(include_arg)
         // The input header we would like to generate
         // bindings for.
         .header("wrapper.h")
@@ -38,14 +45,15 @@ fn main() {
         .whitelist_type("kvs_.*")
         .constified_enum_module("flux_flag")
         .constified_enum_module("kvs_op")
-        // .rustified_enum("kvs_op") //can't, enums need names and functions need to take the enum
         // .bitfield_enum("FLUX_.*")
         // .rustified_enum("FLUX_.*") //can't, enums need names and functions need to take the enum
         // type...
         // Finish the builder and generate the bindings.
         .generate()
         // Unwrap the Result and panic on failure.
-        .expect("Unable to generate bindings");
+        .expect("Unable to generate bindings.  If this is an include directory or clang argument
+        issue, use BINDGEN_EXTRA_CLANG_ARGS='args' to pass in necessary include paths and FLUX_PATH
+        to set the base path of the flux install");
 
     // Write the bindings to the $OUT_DIR/bindings.rs file.
     let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
