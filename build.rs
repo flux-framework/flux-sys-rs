@@ -28,6 +28,7 @@ fn main() {
         Err(_) => "/usr/local/include".to_string()
     };
     let include_arg = "-I".to_string() + &flux_path + "/include";
+    println!("cargo:rustc-link-path=native={:?}/lib", flux_path);
 
     // The bindgen::Builder is the main entry point
     // to bindgen, and lets you build up options for
