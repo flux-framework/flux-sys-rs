@@ -1,0 +1,13 @@
+[package]
+name = "flux-sys"
+version = "0.1.0"
+authors = ["Tom Scogland <scogland1@llnl.gov>"]
+edition = "2018"
+links = "flux-core"
+
+[dependencies]
+
+[build-dependencies]
+bindgen = "0.48.1"
+which = "2.0.1"
+
