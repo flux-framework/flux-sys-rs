@@ -1,15 +1,43 @@
 extern crate bindgen;
 
-use which::which;
 use std::env;
 use std::path::PathBuf;
+use std::process::Command;
+use std::string;
+use which::which;
+
+fn get_path_from_llvm(p: &str, s: &[&str]) -> PathBuf {
+    PathBuf::from(
+        String::from_utf8(
+            Command::new(p)
+                .args(s)
+                .output()
+                .expect("llvm-config --libdir failed")
+                .stdout,
+        )
+        .expect("response from llvm-config is not valid utf8")
+        .trim(),
+    )
+}
 
 fn main() {
     // Tell cargo to tell rustc to link the system bzip2
     // shared library.
     println!("cargo:rustc-link-lib=flux-core");
 
-    if let Ok(mut clang_path) = which("clang") {
+    if let Ok(llvm_config_path) = which("llvm-config") {
+        let lc_str = llvm_config_path
+            .to_str()
+            .expect("llvm config path is not valid utf8");
+        let libdir = get_path_from_llvm(lc_str, &["--libdir"]);
+        let mut clang_path = get_path_from_llvm(lc_str, &["--bindir"]);
+
+        clang_path.push("clang");
+        println!("LIBCLANG_PATH={:?}", libdir);
+        env::set_var("LIBCLANG_PATH", libdir);
+        println!("CLANG_PATH={:?}", clang_path);
+        env::set_var("CLANG_PATH", clang_path);
+    } else if let Ok(mut clang_path) = which("clang") {
         println!("{:?}", clang_path);
         if let Err(_) = env::var("CLANG_PATH") {
             env::set_var("CLANG_PATH", &clang_path);
@@ -25,7 +53,7 @@ fn main() {
 
     let flux_path = match env::var("FLUX_PATH") {
         Ok(p) => p,
-        Err(_) => "/usr/local/include".to_string()
+        Err(_) => "/usr/local".to_string(),
     };
     let include_arg = "-I".to_string() + &flux_path + "/include";
     println!("cargo:rustc-link-search=native={}/lib", flux_path);
@@ -52,9 +80,11 @@ fn main() {
         // Finish the builder and generate the bindings.
         .generate()
         // Unwrap the Result and panic on failure.
-        .expect("Unable to generate bindings.  If this is an include directory or clang argument
+        .expect(
+            "Unable to generate bindings.  If this is an include directory or clang argument
         issue, use BINDGEN_EXTRA_CLANG_ARGS='args' to pass in necessary include paths and FLUX_PATH
-        to set the base path of the flux install");
+        to set the base path of the flux install",
+        );
 
     // Write the bindings to the $OUT_DIR/bindings.rs file.
     let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
