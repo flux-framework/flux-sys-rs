@@ -3,7 +3,6 @@ extern crate bindgen;
 use std::env;
 use std::path::PathBuf;
 use std::process::Command;
-use std::string;
 use which::which;
 
 fn get_path_from_llvm(p: &str, s: &[&str]) -> PathBuf {
