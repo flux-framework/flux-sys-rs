@@ -24,7 +24,9 @@ fn main() {
     // shared library.
     println!("cargo:rustc-link-lib=flux-core");
 
-    if let Ok(llvm_config_path) = which("llvm-config") {
+    if let libclang_path = env::var("LIBCLANG_PATH") {
+        println!("LIBCLANG_PATH already set to {}, not overriding", libclang_path.unwrap());
+    } else if let Ok(llvm_config_path) = which("llvm-config") {
         let lc_str = llvm_config_path
             .to_str()
             .expect("llvm config path is not valid utf8");
