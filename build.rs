@@ -71,11 +71,11 @@ fn main() {
         // bindings for.
         .header("wrapper.h")
         // Only take flux functions, etc.
-        .whitelist_function("flux_.*")
-        .whitelist_var("FLUX_.*")
-        .whitelist_var("flux_.*")
-        .whitelist_type("flux_.*")
-        .whitelist_type("kvs_.*")
+        .allowlist_function("flux_.*")
+        .allowlist_var("FLUX_.*")
+        .allowlist_var("flux_.*")
+        .allowlist_type("flux_.*")
+        .allowlist_type("kvs_.*")
         .constified_enum_module("flux_flag")
         .constified_enum_module("kvs_op")
         // .bitfield_enum("FLUX_.*")
