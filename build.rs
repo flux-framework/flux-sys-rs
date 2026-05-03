@@ -1,98 +1,100 @@
-extern crate bindgen;
-
 use std::env;
 use std::path::PathBuf;
-use std::process::Command;
-use which::which;
-
-fn get_path_from_llvm(p: &str, s: &[&str]) -> PathBuf {
-    PathBuf::from(
-        String::from_utf8(
-            Command::new(p)
-                .args(s)
-                .output()
-                .expect("llvm-config --libdir failed")
-                .stdout,
-        )
-        .expect("response from llvm-config is not valid utf8")
-        .trim(),
-    )
-}
 
 fn main() {
-    // Tell cargo to tell rustc to link the system flux-core
-    // shared library.
-    println!("cargo:rustc-link-lib=flux-core");
-
-    if let Ok(libclang_path) = env::var("LIBCLANG_PATH") {
-        println!(
-            "LIBCLANG_PATH already set to {}, not overriding",
-            libclang_path
-        );
-    } else if let Ok(llvm_config_path) = which("llvm-config") {
-        let lc_str = llvm_config_path
-            .to_str()
-            .expect("llvm config path is not valid utf8");
-        let libdir = get_path_from_llvm(lc_str, &["--libdir"]);
-        let mut clang_path = get_path_from_llvm(lc_str, &["--bindir"]);
-
-        clang_path.push("clang");
-        println!("LIBCLANG_PATH={:?}", libdir);
-        env::set_var("LIBCLANG_PATH", libdir);
-        println!("CLANG_PATH={:?}", clang_path);
-        env::set_var("CLANG_PATH", clang_path);
-    } else if let Ok(mut clang_path) = which("clang") {
-        println!("{:?}", clang_path);
-        if let Err(_) = env::var("CLANG_PATH") {
-            env::set_var("CLANG_PATH", &clang_path);
+    // Find flux-core.
+    // By default, this uses pkg-config. If that lookup succeeds,
+    // we simply build the include compiler flags and store them.
+    // If the lookup fails, we fallback to a manual lookup using the
+    // FLUX_PATH environment variable.
+    let include_args: Vec<String> = match pkg_config::Config::new()
+        .atleast_version("0.49.0")
+        .probe("flux-core")
+    {
+        Ok(lib) => {
+            // pkg-config found flux-core. It has already emitted
+            // cargo:rustc-link-lib and cargo:rustc-link-search
+            // directives for us.
+            let args: Vec<String> = lib
+                .include_paths
+                .iter()
+                .map(|p| format!("-I{}", p.display()))
+                .collect();
+            args
         }
-        if let Err(_) = env::var("LIBCLANG_PATH") {
-            // TODO: deal with 32 bit?
-            clang_path.pop(); // remove clang
-            clang_path.pop(); // remove bin
-            clang_path.push("lib64");
-            env::set_var("LIBCLANG_PATH", clang_path);
+        Err(pkg_err) => {
+            // Fall back to FLUX_PATH, matching the old behavior
+            eprintln!(
+                "cargo:warning=pkg-config failed ({}), falling back to FLUX_PATH",
+                pkg_err
+            );
+
+            let flux_path = env::var("FLUX_PATH").unwrap_or_else(|_| {
+                panic!(
+                    "flux-core not found via pkg-config and FLUX_PATH is not set. \
+                     Set PKG_CONFIG_PATH or FLUX_PATH to your Flux installation."
+                )
+            });
+
+            println!("cargo:rustc-link-lib=flux-core");
+            println!("cargo:rustc-link-search=native={}/lib", flux_path);
+
+            let args = vec![format!("-I{}/include", flux_path)];
+            args
+        }
+    };
+
+    // Create a bindgen builder based on wrapper.h.
+    // By default, we only set the -I flags from above as clang args.
+    let mut builder = bindgen::Builder::default()
+        .header("wrapper.h")
+        .clang_args(&include_args);
+
+    // Allow the user to pass extra clang args to bindgen using the,
+    // BINDGEN_EXTRA_CLANG_ARGS environment variable.
+    if let Ok(extra_args) = env::var("BINDGEN_EXTRA_CLANG_ARGS") {
+        for arg in extra_args.split_whitespace() {
+            builder = builder.clang_arg(arg);
         }
     }
 
-    let flux_path = match env::var("FLUX_PATH") {
-        Ok(p) => p,
-        Err(_) => "/usr/local".to_string(),
-    };
-    let include_arg = "-I".to_string() + &flux_path + "/include";
-    println!("cargo:rustc-link-search=native={}/lib", flux_path);
-
-    // The bindgen::Builder is the main entry point
-    // to bindgen, and lets you build up options for
-    // the resulting bindings.
-    let bindings = bindgen::Builder::default()
-        .clang_arg(include_arg)
-        // The input header we would like to generate
-        // bindings for.
-        .header("wrapper.h")
-        // Only take flux functions, etc.
+    // Configure bindgen filters
+    let bindings = builder
+        // Functions
         .allowlist_function("flux_.*")
-        .allowlist_var("FLUX_.*")
-        .allowlist_var("flux_.*")
+        // Types
         .allowlist_type("flux_.*")
         .allowlist_type("kvs_.*")
+        // Constants and variables
+        .allowlist_var("FLUX_.*")
+        .allowlist_var("flux_.*")
+        // Enum handling: constified_enum_module creates a Rust module
+        // with associated constants, which is safer than rustified_enum
+        // for C enums that are used as bitflags or passed as int arguments
         .constified_enum_module("flux_flag")
         .constified_enum_module("kvs_op")
-        // .bitfield_enum("FLUX_.*")
-        // .rustified_enum("FLUX_.*") //can't, enums need names and functions need to take the enum
-        // type...
-        // Finish the builder and generate the bindings.
+        // Derive useful traits on generated structs
+        .derive_debug(true)
+        .derive_default(true)
+        // Re-run build.rs if wrapper.h changes
+        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
+        // Generate bindings
         .generate()
-        // Unwrap the Result and panic on failure.
+        // Error out if anything goes wrong
         .expect(
-            "Unable to generate bindings.  If this is an include directory or clang argument
-        issue, use BINDGEN_EXTRA_CLANG_ARGS='args' to pass in necessary include paths and FLUX_PATH
-        to set the base path of the flux install",
+            "Unable to generate bindings. Ensure flux-core is installed \
+             and discoverable via pkg-config or FLUX_PATH.",
         );
 
-    // Write the bindings to the $OUT_DIR/bindings.rs file.
+    // Write bindings to $OUT_DIR
     let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
     bindings
-        .write_to_file(out_path.join("bindings.rs"))
-        .expect("Couldn't write bindings!");
+        .write_to_file(out_path.join("core.rs"))
+        .expect("Couldn't write bindings");
+
+    // Re-run if relevant environment variables change
+    println!("cargo:rerun-if-env-changed=FLUX_PATH");
+    println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
+    println!("cargo:rerun-if-env-changed=BINDGEN_EXTRA_CLANG_ARGS");
+    println!("cargo:rerun-if-changed=wrapper.h");
 }
