@@ -124,6 +124,8 @@ fn configure_idset(out_dir: &Path) {
             .clang_args(&include_args)
             .allowlist_function("idset_.*")
             .allowlist_type("idset_.*")
+            .allowlist_var("IDSET_.*")
+            .allowlist_var("idset_.*")
             .constified_enum_module("idset_flags")
             // Define a macro to make sure Bindgen can see contents in wrapper.h
             .clang_arg("-DFLUX_SYS_FEATURE_IDSET"),
