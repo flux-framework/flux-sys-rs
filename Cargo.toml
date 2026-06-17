@@ -8,3 +8,10 @@ links = "flux-core"
 [build-dependencies]
 bindgen = "0.69"
 pkg-config = "0.3"
+
+[features]
+default = ["core", "idset", "hostlist"]
+core = []
+idset = []
+hostlist = []
+# sched = []
