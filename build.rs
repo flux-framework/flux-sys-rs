@@ -100,6 +100,11 @@ fn configure_core(out_dir: &Path) {
             // Types
             .allowlist_type("flux_.*")
             .allowlist_type("kvs_.*")
+            .allowlist_type("job_submit_flags")
+            .allowlist_type("job_event_watch_flags")
+            .allowlist_type("job_lookup_flags")
+            .allowlist_type("job_urgency")
+            .allowlist_type("queue_priority")
             // Constants and variables
             .allowlist_var("FLUX_.*")
             .allowlist_var("flux_.*")
