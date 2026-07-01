@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 fn probe_component_clang_flags(
     component_name: &str,
     min_component_version: &str,
-) -> (bool, Vec<String>) {
+) -> (bool, Vec<String>, String) {
     match pkg_config::Config::new()
         .atleast_version(min_component_version)
         .probe(component_name)
@@ -25,7 +25,7 @@ fn probe_component_clang_flags(
                 .iter()
                 .map(|p| format!("-I{}", p.display()))
                 .collect();
-            (false, args)
+            (false, args, lib.version)
         }
         Err(pkg_err) => {
             // Produce a Cargo warning saying we fell back to FLUX_PATH
@@ -38,7 +38,7 @@ fn probe_component_clang_flags(
             // Tell Clang/LLVM where to search for the component's libraries
             println!("cargo:rustc-link-search=native={}/lib", flux_path);
             let args = vec![format!("-I{}/include", flux_path)];
-            (true, args)
+            (true, args, min_component_version.to_string())
         }
     }
 }
@@ -87,11 +87,19 @@ macro_rules! write_bindings {
     }};
 }
 
+macro_rules! write_version_for_dependents {
+    ($version_component_name:expr, $version:expr) => {
+        println!("cargo:{}-version={}", $version_component_name, $version)
+    };
+}
+
 fn configure_core(out_dir: &Path) {
-    let (is_fallback, include_args) = probe_component_clang_flags("flux-core", "0.49.0");
+    let (is_fallback, include_args, flux_core_version) =
+        probe_component_clang_flags("flux-core", "0.49.0");
     if is_fallback {
         println!("cargo:rustc-link-lib=flux-core");
     }
+    write_version_for_dependents!("core", flux_core_version);
     let bindings = generate_bindings!(
         create_base_builder("flux-core")
             .clang_args(&include_args)
@@ -120,10 +128,12 @@ fn configure_core(out_dir: &Path) {
 }
 
 fn configure_idset(out_dir: &Path) {
-    let (is_fallback, include_args) = probe_component_clang_flags("flux-idset", "0.49.0");
+    let (is_fallback, include_args, idset_version) =
+        probe_component_clang_flags("flux-idset", "0.49.0");
     if is_fallback {
         println!("cargo:rustc-link-lib=flux-idset");
     }
+    write_version_for_dependents!("idset", idset_version);
     let bindings = generate_bindings!(
         create_base_builder("flux-idset")
             .clang_args(&include_args)
@@ -140,10 +150,12 @@ fn configure_idset(out_dir: &Path) {
 }
 
 fn configure_hostlist(out_dir: &Path) {
-    let (is_fallback, include_args) = probe_component_clang_flags("flux-hostlist", "0.49.0");
+    let (is_fallback, include_args, hostlist_version) =
+        probe_component_clang_flags("flux-hostlist", "0.49.0");
     if is_fallback {
         println!("cargo:rustc-link-lib=flux-hostlist");
     }
+    write_version_for_dependents!("hostlist", hostlist_version);
     let bindings = generate_bindings!(
         create_base_builder("flux-hostlist")
             .clang_args(&include_args)

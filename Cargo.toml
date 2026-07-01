@@ -3,7 +3,7 @@ name = "flux-sys"
 version = "0.3.0"
 authors = ["Tom Scogland <scogland1@llnl.gov>"]
 edition = "2021"
-links = "flux-core"
+links = "flux"
 
 [build-dependencies]
 bindgen = "0.69"
