@@ -12,6 +12,7 @@ pkg-config = "0.3"
 [features]
 default = ["core", "idset", "hostlist"]
 core = []
+jobtap = []
 idset = []
 hostlist = []
 # sched = []

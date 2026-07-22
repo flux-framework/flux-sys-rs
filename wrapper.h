@@ -1,5 +1,8 @@
 #ifdef FLUX_SYS_FEATURE_CORE
 #include <flux/core.h>
+#ifdef FLUX_SYS_FEATURE_JOBTAP
+#include <flux/jobtap.h>
+#endif
 #endif
 
 #ifdef FLUX_SYS_FEATURE_IDSET

@@ -100,30 +100,33 @@ fn configure_core(out_dir: &Path) {
         println!("cargo:rustc-link-lib=flux-core");
     }
     write_version_for_dependents!("core", flux_core_version);
-    let bindings = generate_bindings!(
-        create_base_builder("flux-core")
-            .clang_args(&include_args)
-            // Functions
-            .allowlist_function("flux_.*")
-            // Types
-            .allowlist_type("flux_.*")
-            .allowlist_type("kvs_.*")
-            .allowlist_type("job_submit_flags")
-            .allowlist_type("job_event_watch_flags")
-            .allowlist_type("job_lookup_flags")
-            .allowlist_type("job_urgency")
-            .allowlist_type("queue_priority")
-            // Constants and variables
-            .allowlist_var("FLUX_.*")
-            .allowlist_var("flux_.*")
-            // Enum handling: constified_enum_module creates a Rust module
-            // with associated constants, which is safer than rustified_enum
-            // for C enums that are used as bitflags or passed as int arguments
-            .constified_enum_module("kvs_op")
-            // Define a macro to make sure Bindgen can see contents in wrapper.h
-            .clang_arg("-DFLUX_SYS_FEATURE_CORE"),
-        "flux-core"
-    );
+    let mut builder = create_base_builder("flux-core")
+        .clang_args(&include_args)
+        // Functions
+        .allowlist_function("flux_.*")
+        // Types
+        .allowlist_type("flux_.*")
+        .allowlist_type("kvs_.*")
+        .allowlist_type("job_submit_flags")
+        .allowlist_type("job_event_watch_flags")
+        .allowlist_type("job_lookup_flags")
+        .allowlist_type("job_urgency")
+        .allowlist_type("queue_priority")
+        // Constants and variables
+        .allowlist_var("FLUX_.*")
+        .allowlist_var("flux_.*")
+        // Enum handling: constified_enum_module creates a Rust module
+        // with associated constants, which is safer than rustified_enum
+        // for C enums that are used as bitflags or passed as int arguments
+        .constified_enum_module("kvs_op")
+        // Define a macro to make sure Bindgen can see contents in wrapper.h
+        .clang_arg("-DFLUX_SYS_FEATURE_CORE");
+    // If both the "core" and "jobtap" features are included, define the
+    // FLUX_SYS_FEATURE_JOBTAP macro to ensure the flux/jobtap.h header is included
+    if cfg!(feature = "jobtap") {
+        builder = builder.clang_arg("-DFLUX_SYS_FEATURE_JOBTAP");
+    }
+    let bindings = generate_bindings!(builder, "flux-core");
     write_bindings!(bindings, "core.rs", out_dir);
 }
 
