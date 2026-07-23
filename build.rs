@@ -1,98 +1,193 @@
-extern crate bindgen;
-
 use std::env;
-use std::path::PathBuf;
-use std::process::Command;
-use which::which;
+use std::path::{Path, PathBuf};
 
-fn get_path_from_llvm(p: &str, s: &[&str]) -> PathBuf {
-    PathBuf::from(
-        String::from_utf8(
-            Command::new(p)
-                .args(s)
-                .output()
-                .expect("llvm-config --libdir failed")
-                .stdout,
-        )
-        .expect("response from llvm-config is not valid utf8")
-        .trim(),
-    )
+/// Probes for the clang flags needed for the specified Flux component using pkg-config.
+/// If pkg-config cannot find the component, the check falls back to using the FLUX_PATH environment variable.
+/// Returns a 2-tuple where the first element is a boolean indicating whether the fallback was used (true) or not (false) and
+/// the second element is a Vec<String> of the flags that need to be added to Clang.
+///
+/// Note: If the first element of the return tuple is true, prints related to library linking do not need to be manually
+///       injected. The pkg_config crate will do it for us.
+fn probe_component_clang_flags(
+    component_name: &str,
+    min_component_version: &str,
+) -> (bool, Vec<String>, String) {
+    match pkg_config::Config::new()
+        .atleast_version(min_component_version)
+        .probe(component_name)
+    {
+        Ok(lib) => {
+            // Get the include paths for the component
+            // Note: we don't need to do any explicit library searching/linking if we hit this
+            //       branch because pkg-config does it for us.
+            let args: Vec<String> = lib
+                .include_paths
+                .iter()
+                .map(|p| format!("-I{}", p.display()))
+                .collect();
+            (false, args, lib.version)
+        }
+        Err(pkg_err) => {
+            // Produce a Cargo warning saying we fell back to FLUX_PATH
+            eprintln!(
+                "cargo:warning=pkg-config failed for {} ({}), falling back to FLUX_PATH",
+                component_name, pkg_err,
+            );
+            // Check the FLUX_PATH environment variable or panic
+            let flux_path = env::var("FLUX_PATH").unwrap_or_else(|_| panic!("{} not found via pkg-config and FLUX_PATH is not set. Set PKG_CONFIG_PATH or FLUX_PATH to your Flux installation", component_name));
+            // Tell Clang/LLVM where to search for the component's libraries
+            println!("cargo:rustc-link-search=native={}/lib", flux_path);
+            let args = vec![format!("-I{}/include", flux_path)];
+            (true, args, min_component_version.to_string())
+        }
+    }
 }
 
-fn main() {
-    // Tell cargo to tell rustc to link the system flux-core
-    // shared library.
-    println!("cargo:rustc-link-lib=flux-core");
+fn create_base_builder(component_name: &str) -> bindgen::Builder {
+    // Create a bindgen builder based on wrapper.h.
+    let mut builder = bindgen::Builder::default()
+        .header("wrapper.h")
+        // Derive useful traits on generated structs
+        .derive_debug(true)
+        .derive_default(true)
+        // Re-run build.rs if wrapper.h changes
+        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()));
 
-    if let Ok(libclang_path) = env::var("LIBCLANG_PATH") {
-        println!(
-            "LIBCLANG_PATH already set to {}, not overriding",
-            libclang_path
-        );
-    } else if let Ok(llvm_config_path) = which("llvm-config") {
-        let lc_str = llvm_config_path
-            .to_str()
-            .expect("llvm config path is not valid utf8");
-        let libdir = get_path_from_llvm(lc_str, &["--libdir"]);
-        let mut clang_path = get_path_from_llvm(lc_str, &["--bindir"]);
-
-        clang_path.push("clang");
-        println!("LIBCLANG_PATH={:?}", libdir);
-        env::set_var("LIBCLANG_PATH", libdir);
-        println!("CLANG_PATH={:?}", clang_path);
-        env::set_var("CLANG_PATH", clang_path);
-    } else if let Ok(mut clang_path) = which("clang") {
-        println!("{:?}", clang_path);
-        if let Err(_) = env::var("CLANG_PATH") {
-            env::set_var("CLANG_PATH", &clang_path);
-        }
-        if let Err(_) = env::var("LIBCLANG_PATH") {
-            // TODO: deal with 32 bit?
-            clang_path.pop(); // remove clang
-            clang_path.pop(); // remove bin
-            clang_path.push("lib64");
-            env::set_var("LIBCLANG_PATH", clang_path);
+    // Allow the user to pass extra clang args to bindgen using the,
+    // BINDGEN_EXTRA_CLANG_ARGS_<component_name> environment variable.
+    let env_var_name = format!("BINDGEN_EXTRA_CLANG_ARGS_{}", component_name.to_uppercase());
+    if let Ok(extra_args) = env::var(env_var_name) {
+        for arg in extra_args.split_whitespace() {
+            builder = builder.clang_arg(arg);
         }
     }
 
-    let flux_path = match env::var("FLUX_PATH") {
-        Ok(p) => p,
-        Err(_) => "/usr/local".to_string(),
-    };
-    let include_arg = "-I".to_string() + &flux_path + "/include";
-    println!("cargo:rustc-link-search=native={}/lib", flux_path);
+    builder
+}
 
-    // The bindgen::Builder is the main entry point
-    // to bindgen, and lets you build up options for
-    // the resulting bindings.
-    let bindings = bindgen::Builder::default()
-        .clang_arg(include_arg)
-        // The input header we would like to generate
-        // bindings for.
-        .header("wrapper.h")
-        // Only take flux functions, etc.
+macro_rules! generate_bindings {
+    ($builder:expr, $component_name:literal) => {
+        $builder.generate().unwrap_or_else(|err| panic!(
+            "Unable to generate bindings. Ensure {} is installed and discoverable via pkg-config or FLUX_PATH. Error: {}",
+            $component_name, err,
+        ))
+    };
+}
+
+macro_rules! write_bindings {
+    ($bindings:expr, $binding_file_name:literal, $out_dir:expr) => {{
+        $bindings
+            .write_to_file($out_dir.join($binding_file_name))
+            .unwrap_or_else(|err| {
+                panic!(
+                    "Cannot write bindings to {}. Error: {}",
+                    $binding_file_name, err
+                )
+            });
+    }};
+}
+
+macro_rules! write_version_for_dependents {
+    ($version_component_name:expr, $version:expr) => {
+        println!("cargo:{}-version={}", $version_component_name, $version)
+    };
+}
+
+fn configure_core(out_dir: &Path) {
+    let (is_fallback, include_args, flux_core_version) =
+        probe_component_clang_flags("flux-core", "0.49.0");
+    if is_fallback {
+        println!("cargo:rustc-link-lib=flux-core");
+    }
+    write_version_for_dependents!("core", flux_core_version);
+    let mut builder = create_base_builder("flux-core")
+        .clang_args(&include_args)
+        // Functions
         .allowlist_function("flux_.*")
-        .allowlist_var("FLUX_.*")
-        .allowlist_var("flux_.*")
+        // Types
         .allowlist_type("flux_.*")
         .allowlist_type("kvs_.*")
-        .constified_enum_module("flux_flag")
+        .allowlist_type("job_submit_flags")
+        .allowlist_type("job_event_watch_flags")
+        .allowlist_type("job_lookup_flags")
+        .allowlist_type("job_urgency")
+        .allowlist_type("queue_priority")
+        // Constants and variables
+        .allowlist_var("FLUX_.*")
+        .allowlist_var("flux_.*")
+        // Enum handling: constified_enum_module creates a Rust module
+        // with associated constants, which is safer than rustified_enum
+        // for C enums that are used as bitflags or passed as int arguments
         .constified_enum_module("kvs_op")
-        // .bitfield_enum("FLUX_.*")
-        // .rustified_enum("FLUX_.*") //can't, enums need names and functions need to take the enum
-        // type...
-        // Finish the builder and generate the bindings.
-        .generate()
-        // Unwrap the Result and panic on failure.
-        .expect(
-            "Unable to generate bindings.  If this is an include directory or clang argument
-        issue, use BINDGEN_EXTRA_CLANG_ARGS='args' to pass in necessary include paths and FLUX_PATH
-        to set the base path of the flux install",
-        );
+        // Define a macro to make sure Bindgen can see contents in wrapper.h
+        .clang_arg("-DFLUX_SYS_FEATURE_CORE");
+    // If both the "core" and "jobtap" features are included, define the
+    // FLUX_SYS_FEATURE_JOBTAP macro to ensure the flux/jobtap.h header is included
+    if cfg!(feature = "jobtap") {
+        builder = builder.clang_arg("-DFLUX_SYS_FEATURE_JOBTAP");
+    }
+    let bindings = generate_bindings!(builder, "flux-core");
+    write_bindings!(bindings, "core.rs", out_dir);
+}
 
-    // Write the bindings to the $OUT_DIR/bindings.rs file.
-    let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
-    bindings
-        .write_to_file(out_path.join("bindings.rs"))
-        .expect("Couldn't write bindings!");
+fn configure_idset(out_dir: &Path) {
+    let (is_fallback, include_args, idset_version) =
+        probe_component_clang_flags("flux-idset", "0.49.0");
+    if is_fallback {
+        println!("cargo:rustc-link-lib=flux-idset");
+    }
+    write_version_for_dependents!("idset", idset_version);
+    let bindings = generate_bindings!(
+        create_base_builder("flux-idset")
+            .clang_args(&include_args)
+            .allowlist_function("idset_.*")
+            .allowlist_type("idset_.*")
+            .allowlist_var("IDSET_.*")
+            .allowlist_var("idset_.*")
+            .constified_enum_module("idset_flags")
+            // Define a macro to make sure Bindgen can see contents in wrapper.h
+            .clang_arg("-DFLUX_SYS_FEATURE_IDSET"),
+        "flux-idset"
+    );
+    write_bindings!(bindings, "idset.rs", out_dir);
+}
+
+fn configure_hostlist(out_dir: &Path) {
+    let (is_fallback, include_args, hostlist_version) =
+        probe_component_clang_flags("flux-hostlist", "0.49.0");
+    if is_fallback {
+        println!("cargo:rustc-link-lib=flux-hostlist");
+    }
+    write_version_for_dependents!("hostlist", hostlist_version);
+    let bindings = generate_bindings!(
+        create_base_builder("flux-hostlist")
+            .clang_args(&include_args)
+            .allowlist_function("hostlist_.*")
+            .allowlist_type("hostlist_.*")
+            // Define a macro to make sure Bindgen can see contents in wrapper.h
+            .clang_arg("-DFLUX_SYS_FEATURE_HOSTLIST"),
+        "flux-hostlist"
+    );
+    write_bindings!(bindings, "hostlist.rs", out_dir);
+}
+
+fn main() {
+    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    // Generate bindings for each feature
+    // Add blocks as needed for new features
+    if cfg!(feature = "core") {
+        configure_core(&out_dir);
+    }
+    if cfg!(feature = "idset") {
+        configure_idset(&out_dir);
+    }
+    if cfg!(feature = "hostlist") {
+        configure_hostlist(&out_dir);
+    }
+
+    // Re-run if relevant environment variables change
+    println!("cargo:rerun-if-env-changed=FLUX_PATH");
+    println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
+    println!("cargo:rerun-if-env-changed=BINDGEN_EXTRA_CLANG_ARGS");
+    println!("cargo:rerun-if-changed=wrapper.h");
 }

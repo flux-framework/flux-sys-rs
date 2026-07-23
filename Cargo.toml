@@ -1,12 +1,18 @@
 [package]
 name = "flux-sys"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Tom Scogland <scogland1@llnl.gov>"]
-edition = "2018"
-links = "flux-core"
-
-[dependencies]
+edition = "2021"
+links = "flux"
 
 [build-dependencies]
-which = "2.0.1"
-bindgen = "^0.65.1"
+bindgen = "0.69"
+pkg-config = "0.3"
+
+[features]
+default = ["core", "idset", "hostlist"]
+core = []
+jobtap = []
+idset = []
+hostlist = []
+# sched = []
